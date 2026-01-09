@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>OSSSC Server Monitor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f172a">
+
+<style>
+body {
+  font-family: Arial, sans-serif;
+  background: #0f172a;
+  color: #e5e7eb;
+  padding: 16px;
+}
+
+h1 { color: #38bdf8; }
+
+.status {
+  font-size: 22px;
+  font-weight: bold;
+  margin-bottom: 8px;
+}
+
+.green { color: #22c55e; }
+.red { color: #ef4444; }
+
+.timer {
+  font-size: 18px;
+  margin: 6px 0;
+}
+
+canvas {
+  width: 100%;
+  height: 120px;
+  background: #020617;
+  border-radius: 6px;
+  margin: 10px 0;
+}
+
+button {
+  background: #38bdf8;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 10px;
+}
+
+ul {
+  max-height: 240px;
+  overflow-y: auto;
+  background: #020617;
+  padding: 8px;
+  border-radius: 6px;
+}
+
+li { font-size: 13px; }
+</style>
+</head>
+
+<body>
+
+<h1>OSSSC Server Monitor</h1>
+
+<div id="status" class="status red">🔴 RED — DO NOT TRY</div>
+<div id="stopwatch" class="timer">⏱️ 00:00.0</div>
+<div id="uptime"></div>
+
+<canvas id="graph"></canvas>
+
+<button onclick="resetApp()">🔄 Restart 20-Minute Session</button>
+
+<ul id="log"></ul>
+
+<audio id="alarm" src="alarm.mp3" preload="auto"></audio>
+
+<script>
+const URL = "https://www.osssc.gov.in/";
+const CHECK_INTERVAL = 15000;
+const MAX_TIME = 20 * 60 * 1000;
+const GREEN_WINDOW = 10 * 60 * 1000;
+
+let results = [];
+let startTime = Date.now();
+let greenTriggered = false;
+
+const alarm = document.getElementById("alarm");
+const canvas = document.getElementById("graph");
+const ctx = canvas.getContext("2d");
+
+// Service Worker
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js");
+}
+
+// Notification permission
+if ("Notification" in window) {
+  Notification.requestPermission();
+}
+
+// Stopwatch (100ms)
+setInterval(() => {
+  const elapsed = Date.now() - startTime;
+  const m = Math.floor(elapsed / 60000);
+  const s = Math.floor((elapsed % 60000) / 1000);
+  const d = Math.floor((elapsed % 1000) / 100);
+  document.getElementById("stopwatch").innerText =
+    `⏱️ ${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}.${d}`;
+
+  if (elapsed >= MAX_TIME) {
+    document.getElementById("status").innerText =
+      "⏰ 20 MINUTES OVER — PLEASE REFRESH";
+  }
+}, 100);
+
+// Check server
+async function checkSite() {
+  let success = false;
+  try {
+    await fetch(URL, { mode: "no-cors", cache: "no-store" });
+    success = true;
+  } catch {}
+
+  const now = Date.now();
+  results.push({ time: now, success });
+  results = results.filter(r => now - r.time <= MAX_TIME);
+
+  updateUI();
+}
+setInterval(checkSite, CHECK_INTERVAL);
+checkSite();
+
+function updateUI() {
+  const status = document.getElementById("status");
+  const uptimeDiv = document.getElementById("uptime");
+  const log = document.getElementById("log");
+
+  const okCount = results.filter(r => r.success).length;
+  const uptime = ((okCount / results.length) * 100).toFixed(1);
+
+  const recentFailures = results.filter(
+    r => !r.success && Date.now() - r.time <= GREEN_WINDOW
+  );
+
+  const isGreen =
+    uptime >= 70 &&
+    recentFailures.length === 0 &&
+    results.length >= 40;
+
+  if (isGreen) {
+    status.className = "status green";
+    status.innerText = "🟢 GREEN — SAFE TO TRY";
+
+    if (!greenTriggered) {
+      greenTriggered = true;
+      alarm.play();
+      navigator.vibrate?.([300, 200, 300]);
+      if (Notification.permission === "granted") {
+        new Notification("OSSSC SERVER IS UP", {
+          body: "Stable for 10+ minutes"
+        });
+      }
+    }
+  } else {
+    status.className = "status red";
+    status.innerText = "🔴 RED — DO NOT TRY";
+    greenTriggered = false;
+  }
+
+  uptimeDiv.innerText = `Uptime (last 20 min): ${uptime}%`;
+
+  const last = results[results.length - 1];
+  const li = document.createElement("li");
+  li.textContent =
+    `${new Date(last.time).toLocaleTimeString()} → ${last.success ? "OK" : "FAILED"}`;
+  li.style.color = last.success ? "#22c55e" : "#ef4444";
+  log.prepend(li);
+
+  drawGraph();
+}
+
+function drawGraph() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  const w = canvas.width / results.length;
+
+  results.forEach((r, i) => {
+    ctx.fillStyle = r.success ? "#22c55e" : "#ef4444";
+    ctx.fillRect(i * w, 0, w - 1, canvas.height);
+  });
+}
+
+function resetApp() {
+  location.reload();
+}
+</script>
+
+</body>
+</html>
